@@ -215,20 +215,39 @@ void TwoWire::beginTransmission(int address) {
 //
 uint8_t TwoWire::endTransmission(uint8_t sendStop) {
 	uint8_t error = 0;
-	// transmit buffer (blocking)
-	TWI_StartWrite(twi, txAddress, 0, 0, txBuffer[0]);
-	if (!TWI_WaitByteSent(twi, XMIT_TIMEOUT))
-		error = 2;	// error, got NACK on address transmit
-	
-	if (error == 0) {
-		uint16_t sent = 1;
-		while (sent < txBufferLength) {
-			TWI_WriteByte(twi, txBuffer[sent++]);
-			if (!TWI_WaitByteSent(twi, XMIT_TIMEOUT))
-				error = 3;	// error, got NACK during data transmmit
+	if(txBufferLength) {
+		// transmit buffer (blocking)
+		TWI_StartWrite(twi, txAddress, 0, 0, txBuffer[0]);
+		if (!TWI_WaitByteSent(twi, XMIT_TIMEOUT))
+			error = 2;	// error, got NACK on address transmit
+
+		if (error == 0) {
+			uint16_t sent = 1;
+			while (sent < txBufferLength) {
+				TWI_WriteByte(twi, txBuffer[sent++]);
+				if (!TWI_WaitByteSent(twi, XMIT_TIMEOUT))
+					error = 3;	// error, got NACK during data transmmit
+			}
 		}
 	}
-	
+
+	if(txWriteRomQuantity!=0)	// Send block data if any
+	{
+		while(txWriteRomIndex != txWriteRomQuantity)
+		{
+			uint8_t c = *PtrTxRomBuffer++;
+			TWI_WriteByte(twi, c);
+			if (!TWI_WaitByteSent(twi, XMIT_TIMEOUT))
+			{
+				error = 3;	// error, got NACK during data transmmit
+				break;
+			}
+			else
+				txWriteRomIndex++;
+		}
+		txWriteRomQuantity=0;
+	}
+
 	if (error == 0) {
 		TWI_Stop(twi);
 		if (!TWI_WaitTransferComplete(twi, XMIT_TIMEOUT))
@@ -277,6 +296,32 @@ size_t TwoWire::write(const uint8_t *data, size_t quantity) {
 		}
 	}
 	return quantity;
+}
+
+size_t TwoWire::writeBlock(const uint8_t *data, size_t quantity) {
+	if (status == MASTER_SEND) {
+		txWriteRomIndex = 0;
+		txWriteRomQuantity = quantity;
+		PtrTxRomBuffer = data;
+		return quantity;
+	}
+	return 0;
+}
+
+size_t TwoWire::writeBlock(const uint8_t *data, size_t quantity, uint16_t internalAddress) {
+	uint8_t MSB = 0x00, LSB = 0x00;
+	if (status == MASTER_SEND) {
+		MSB = (uint8_t)((internalAddress>>8)&0xFF);
+		LSB = (uint8_t)(internalAddress&0xFF);
+		if (txBufferLength >= BUFFER_LENGTH)
+			return 0;
+		txBuffer[txBufferLength++] = MSB;
+		if (txBufferLength >= BUFFER_LENGTH)
+			return 1;
+		txBuffer[txBufferLength++] = LSB;
+		return writeBlock(data, quantity) + 2;
+	}
+	return 0;
 }
 
 int TwoWire::available(void) {
